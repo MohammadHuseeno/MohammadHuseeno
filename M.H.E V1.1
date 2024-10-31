@@ -1,0 +1,88 @@
+
+
+calculate_regression <- function(data, selected_stocks_ev, start_date_ev, end_date_ev) {
+  # تحويل التواريخ إلى صيغة Date
+  data$date <- as.Date(data$date, format = "%Y-%m-%d")
+  
+  # تصفية البيانات بناءً على الفترة الزمنية المطلوبة
+  data_filtered <- subset(data, date >= as.Date(start_date_ev) & date <= as.Date(end_date_ev))
+  
+  # تصفية الـ DataFrame بناءً على الأعمدة المختارة وإضافة العمود التاريخ والعمود الثاني (مؤشر السوق)
+  data_selected <- data_filtered[, c("date", colnames(data_filtered)[2], selected_stocks_ev)]
+  
+  # إضافة جدول جديد لعوائد السوق خلال الفترة الزمنية المختارة
+  market_returns_filtered <- data_selected[, 2]
+  
+  # حساب متوسط عوائد السوق للفترة المحددة
+  expected_market_return <- mean(market_returns_filtered, na.rm = TRUE)
+  
+  # حساب تباين عوائد السوق للفترة المحددة
+  market_return_variance <- var(market_returns_filtered, na.rm = TRUE)
+  
+  # إنشاء قائمة لتخزين النتائج
+  results <- list()
+  total_ratio <- 0
+  
+  # أسماء الأعمدة المراد تحليلها (جميع الأعمدة بدءًا من الثالث)
+  stock_columns <- colnames(data_selected)[3:ncol(data_selected)]
+  
+  # تشغيل النماذج وتخزين النتائج باستخدام أسماء الأعمدة
+  for (i in 1:length(stock_columns)) {
+    model <- lm(data_selected[[stock_columns[i]]] ~ data_selected[[2]])
+    model_coef <- coef(model)
+    residual_variance <- sigma(model)^2
+    ratio <- model_coef[1] / residual_variance
+    total_ratio <- total_ratio + ratio
+    result_name <- stock_columns[i]
+    results[[result_name]] <- c(model_coef, residual_variance, ratio)
+  }
+  
+  # تحويل القائمة إلى DataFrame وتسمية الأعمدة
+  results_df <- do.call(rbind, lapply(names(results), function(x) {
+    data.frame(Model = x, Intercept = results[[x]][1], Slope = results[[x]][2], ResidualVariance = results[[x]][3], Ratio = results[[x]][4])
+  }))
+  
+  # حساب الأوزان Wi بقسمة كل ratio على total_ratio
+  results_df$Wi <- results_df$Ratio / total_ratio
+  
+  # إضافة عمود جديد لضرب القاطع بالأوزان Wi
+  results_df$Intercept_Wi <- results_df$Intercept * results_df$Wi
+  
+  # حساب ألفا المحفظة المتنوعة
+  alpha_portfolio <- sum(results_df$Intercept_Wi)
+  
+  # إضافة عمود جديد لضرب الأوزان بـ Wi بالميل
+  results_df$Slope_Wi <- results_df$Slope * results_df$Wi
+  
+  # حساب بيتا المحفظة المتنوعة
+  beta_portfolio <- sum(results_df$Slope_Wi)
+  
+  # إضافة عمود جديد يحوي تربيع الأوزان المحسوبة
+  results_df$Wi_Squared <- results_df$Wi^2
+  
+  # إضافة عمود جديد لضرب تربيع الأوزان بتباين البواقي
+  results_df$Wi_Squared_ResidualVariance <- results_df$Wi_Squared * results_df$ResidualVariance
+  
+  # حساب تباين المحفظة المتنوعة
+  portfolio_variance <- sum(results_df$Wi_Squared_ResidualVariance)
+  
+  # حساب النسبتين وقسمة الأولى على الثانية للحصول على W0
+  numerator <- alpha_portfolio / portfolio_variance
+  denominator <- expected_market_return / market_return_variance
+  W0 <- numerator / denominator
+  
+  # حساب وزن المحفظة المتنوعة النشطة WA
+  WA <- W0 * (1 - beta_portfolio) / (W0 * (1 - beta_portfolio) + 1)
+  
+  # حساب وزن محفظة السوق Wm
+  Wm <- 1 - WA
+  
+  # ترتيب عمود الميل وإضافة العمود الجديد للترتيب
+  results_df <- results_df[order(-results_df$Slope),]
+  results_df$Slope_Rank <- 1:nrow(results_df)
+  
+  # تحديد عرض الوزن Wi بشكل 0.000
+  results_df$Wi <- round(results_df$Wi, 3)
+  
+  return(list(results_df = results_df, alpha_portfolio = alpha_portfolio, beta_portfolio = beta_portfolio, portfolio_variance = portfolio_variance, expected_market_return = expected_market_return, market_returns_filtered = market_returns_filtered, market_return_variance = market_return_variance, W0 = W0, WA = WA, Wm = Wm))
+}
